@@ -1,9 +1,11 @@
 import torch
 from torch_geometric.loader import DataLoader
 from Clients.Client import Client
-from sklearn.metrics import precision_score, recall_score
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+import argparse
 
 def load_model(checkpoint_path, model_args, device):
     model = Client(**model_args)
@@ -46,13 +48,26 @@ def evaluate(model, dataloader, device, threshold=0.1):
         print("无有效 test_mask 节点可评估")
         return 0.0, 0.0
 
-    preds = torch.cat(all_preds, dim=0).numpy()
-    labels = torch.cat(all_labels, dim=0).numpy()
+    all_preds = torch.cat(all_preds, dim=0).numpy()
+    all_labels = torch.cat(all_labels, dim=0).numpy()
 
-    precision = precision_score(labels, preds, average='micro', zero_division=0)
-    recall = recall_score(labels, preds, average='micro', zero_division=0)
+    precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+    recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+    f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
-    return precision, recall
+    # FPR 计算
+    fpr_list = []
+    for i in range(all_labels.shape[1]):
+        cm = confusion_matrix(all_labels[:, i], all_preds[:, i], labels=[0, 1])
+        if cm.shape == (2, 2):
+            tn, fp = cm[0, 0], cm[0, 1]
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+        else:
+            fpr = 0.0
+        fpr_list.append(fpr)
+    fpr_macro = sum(fpr_list) / len(fpr_list)
+
+    return precision,recall,f1,fpr_macro
 
 
 def main():
@@ -60,9 +75,11 @@ def main():
     rounds = []
     precisions = []
     recalls = []
+    f1s = []
+    fprs = []
 
     # 加载测试数据（包含 test_mask）
-    test_data = torch.load('./Parsed_dataset/BlogCatalog/client0.pt')
+    test_data = torch.load('./Parsed_dataset/BlogCatalog-mask-clonegraph/client0_data.pt')
     test_dataset = [test_data]
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
@@ -72,9 +89,9 @@ def main():
     model_args = dict(
         node_feat_dim=39,
         node_hidden_dim=64,
-        node_embed_dim=128,
+        node_embed_dim=64,
         graph_hidden_dim=64,
-        graph_style_dim=128,
+        graph_style_dim=64,
         fusion_output_dim=128,
         node_num_layers=3,
         graph_num_layers=3,
@@ -83,6 +100,14 @@ def main():
         n_users=n_users
     )
 
+    for i in range(1, 61):
+        checkpoint_path = os.path.join(f'Check_new/client_0_round_{10 * i}.pth')
+        model = load_model(checkpoint_path, model_args, 'cuda')
+        precision, recall, f1, fpr = evaluate(model, test_dataset, 'cuda')
+        print(f"[{checkpoint_path}] Precision: {precision:.4f}, Recall: {recall:.4f}, "
+              f"F1:{f1:.4f}, FPR:{fpr:.4f}")
+
+    """
     for i in range(1, 101):
         checkpoint_path = f'May_fifth/client_0_round_{10 * i}.pth'
         model = load_model(checkpoint_path, model_args, device)
@@ -118,7 +143,7 @@ def main():
     plt.tight_layout()
     plt.savefig('recall_curve.png')
     plt.close()
-
+    """
 
 if __name__ == '__main__':
     main()
