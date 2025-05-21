@@ -52,7 +52,6 @@ class Trainer:
                     for batch in dataloader:
                         batch = batch.to(self.device)
 
-                        # --- 加入保护 ---
                         if not hasattr(batch, 'user_ids') or not hasattr(batch, 'target_labels'):
                             print(f"[Warning] Batch missing user_ids or target_labels at Client {cid}. Skipping.")
                             continue
@@ -63,13 +62,7 @@ class Trainer:
                         train_mask = batch.train_mask if hasattr(batch, 'train_mask') else None
                         user_ids = batch.user_ids.to(self.device)
                         target_labels = batch.target_labels.to(self.device)
-                        """
-                        try:
-                            print(
-                                f"[Debug] Client {cid} target_labels min: {target_labels.min().item()}, max: {target_labels.max().item()}")
-                        except Exception as e:
-                            print(f"[Warning] Cannot print target_labels stats for Client {cid}: {e}")
-                        """
+
                         external_dict = communicator.organize_external_node_embeds(
                             received_packets=self.network[cid],
                             user_ids=user_ids,
@@ -77,14 +70,25 @@ class Trainer:
                             device=self.device
                         )
 
-                        loss, _ = client.forward(
+                        # === 调用 forward 并手动对 label 对齐 ===
+                        loss, logits = client.forward(
                             data=batch,
                             user_ids=user_ids,
                             target_labels=target_labels,
                             alpha=self.alpha,
                             external_node_embeds_dict=external_dict,
-                            mask=train_mask  # ✅ 新增
+                            mask=train_mask  # ✅ mask
                         )
+
+                        # logits 和 target_labels 对齐处理（训练阶段）
+                        if train_mask is not None and logits.shape[1] != target_labels.shape[1]:
+                            # 只保留标签中至少出现一次的列（某些 client 没有所有类别）
+                            valid_label_indices = (target_labels.sum(dim=0) > 0).nonzero(as_tuple=True)[0]
+                            logits = logits[:, valid_label_indices]
+                            target_labels = target_labels[:, valid_label_indices]
+
+                            # 重新计算 loss
+                            loss = client.loss_fn(logits, target_labels)
 
                         if torch.isnan(loss) or torch.isinf(loss):
                             print(f"[Error] Loss is NaN or Inf at Client {cid}, skipping this batch update.")
@@ -96,16 +100,14 @@ class Trainer:
 
                         local_losses.append(loss.item())
 
-                if local_losses:
-                    avg_loss = sum(local_losses) / len(local_losses)
-                else:
-                    avg_loss = 0.0
+                avg_loss = sum(local_losses) / len(local_losses) if local_losses else 0.0
+                if not local_losses:
                     print(f"[Warning] Client {cid} has no batch at Round {round + 1}. Setting avg_loss=0.")
 
                 self.client_losses[cid].append(avg_loss)
                 print(f"[Trainer] Round {round + 1} Client {cid} Loss: {avg_loss:.6f}")
 
-                # 广播本地嵌入
+                # === 广播本地嵌入 ===
                 with torch.no_grad():
                     for batch in dataloader:
                         batch = batch.to(self.device)
@@ -115,17 +117,17 @@ class Trainer:
                             continue
 
                         user_ids = batch.user_ids.to(self.device)
-
                         local_user_embeds = client.node_encoder(batch)
 
                         if torch.isnan(local_user_embeds).any() or torch.isinf(local_user_embeds).any():
                             print(
-                                f"[Error] Found NaN or Inf in local_user_embeds during broadcast at Client {cid}. Skipping this batch.")
+                                f"[Error] NaN or Inf in local_user_embeds during broadcast at Client {cid}. Skipping.")
                             continue
 
                         package = communicator.pack_user_embeddings(user_ids, local_user_embeds)
                         communicator.send_to_all_peers(package, self.network)
 
+            # 清空网络 buffer
             self.network = {cid: [] for cid in self.clients}
 
             if (round + 1) % self.save_every == 0:

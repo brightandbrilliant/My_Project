@@ -102,7 +102,9 @@ class Client(nn.Module):
     def forward(self, data, user_ids, target_labels, alpha, external_node_embeds_dict=None, mask=None, debug=False):
         """
         Args:
-            mask: Optional[Tensor]，形状为 [batch_size] 的布尔张量，表示哪些样本用于训练。
+            user_ids: 1D Tensor，本 client 所负责的全局 user index（即列 index），用于从 logits 中选出对应部分
+            target_labels: [N, num_local_users] 的真实标签
+            mask: Optional[Tensor]，形状为 [N] 的布尔张量，表示哪些样本用于训练。
         """
 
         # Step 1: 本地节点嵌入生成
@@ -137,13 +139,14 @@ class Client(nn.Module):
         if debug and (torch.isnan(fused_embed).any() or torch.isinf(fused_embed).any()):
             print("[Client Debug] fused_embed has nan or inf!")
 
-        # Step 5: 使用 mask 过滤训练数据（仅用于训练阶段）
+        # Step 5: 使用 mask 过滤训练数据
         if mask is not None:
             fused_embed = fused_embed[mask]
             target_labels = target_labels[mask]
 
-        # Step 6: 多分类预测
-        logits = self.predictor(fused_embed)
+        # Step 6: 全量输出 -> 选择本 client 有效列
+        full_logits = self.predictor(fused_embed)  # [N, total_user_count]
+        logits = full_logits[:, user_ids]  # [N, num_local_users]
 
         if debug and (torch.isnan(logits).any() or torch.isinf(logits).any()):
             print("[Client Debug] logits has nan or inf!")
@@ -152,6 +155,7 @@ class Client(nn.Module):
         loss = self.loss_fn(logits, target_labels)
 
         return loss, logits
+
 
 
 
