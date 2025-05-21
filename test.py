@@ -51,9 +51,9 @@ def evaluate(model, dataloader, device, threshold=0.1):
     all_preds = torch.cat(all_preds, dim=0).numpy()
     all_labels = torch.cat(all_labels, dim=0).numpy()
 
-    precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
-    recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
-    f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+    precision = precision_score(all_labels, all_preds, average='micro', zero_division=0)
+    recall = recall_score(all_labels, all_preds, average='micro', zero_division=0)
+    f1 = f1_score(all_labels, all_preds, average='micro', zero_division=0)
 
     # FPR 计算
     fpr_list = []
