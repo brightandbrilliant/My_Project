@@ -19,7 +19,7 @@ def build_clients(n_clients, feature_dim, client_user_counts, device='cpu'):
             fusion_output_dim=128,
             node_num_layers=3,
             graph_num_layers=3,
-            dropout=0.1,
+            dropout=0.4,
             n_clients=n_clients - 1,
             n_users=client_user_counts[cid]  # 为每个 client 单独设置 n_users
         ).to(device)
@@ -37,7 +37,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--local_steps', type=int, default=1)
     parser.add_argument('--total_rounds', type=int, default=5)
-    parser.add_argument('--alpha', type=float, default=0.5)
+    parser.add_argument('--alpha', type=float, default=0.8)
     args = parser.parse_args()
 
     print(f"Using device: {args.device}")
@@ -47,10 +47,8 @@ def main():
     for cid in range(args.n_clients):
         data_path = f'./Parsed_dataset/BlogCatalog/client{cid}.pt'
         data = torch.load(data_path)
-
         if not hasattr(data, 'user_ids'):
-            raise ValueError(f"Client {cid} 的数据缺少 `user_ids` 属性")
-
+            raise ValueError(f"Client {cid} 的数据缺少 user_ids 属性")
         max_uid = int(data.user_ids.max().item())
         client_user_counts.append(max_uid + 1)
 
@@ -62,7 +60,6 @@ def main():
         device=args.device
     )
 
-    # Step 3：构建每个 client 的 DataLoader
     train_loaders = {}
     for cid in range(args.n_clients):
         data_path = f'./Parsed_dataset/BlogCatalog/client{cid}.pt'
@@ -72,21 +69,19 @@ def main():
             data.batch = torch.zeros(data.num_nodes, dtype=torch.long)
 
         if not hasattr(data, 'train_mask'):
-            raise ValueError(f"Client {cid} 的数据缺少 `train_mask` 属性")
-
-        # user_ids 应为本地节点的真实 ID
+            raise ValueError(f"Client {cid} 的数据缺少 train_mask 属性")
         if not hasattr(data, 'user_ids'):
-            raise ValueError(f"Client {cid} 的数据缺少 `user_ids` 属性")
+            raise ValueError(f"Client {cid} 的数据缺少 user_ids 属性")
+
         user_ids = data.user_ids
 
-        # 构造 full_x：将已有 user 特征填入完整维度中
+        # 替换为全尺寸的特征矩阵（填零）
         full_x = torch.zeros((client_user_counts[cid], args.feature_dim), dtype=data.x.dtype)
         full_x[user_ids] = data.x
         data.x = full_x
 
-        # 构造 dataset 和 loader
         dataset = [data]
-        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
         train_loaders[cid] = loader
 
     # Step 4：创建 Trainer 并开始训练
@@ -98,7 +93,7 @@ def main():
         local_steps=args.local_steps,
         total_rounds=args.total_rounds,
         alpha=args.alpha,
-        save_every=200,
+        save_every=10,
         checkpoint_dir='Check_new'
     )
     """
