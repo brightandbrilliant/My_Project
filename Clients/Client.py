@@ -48,7 +48,7 @@ class Client(nn.Module):
                  graph_num_layers,          # GNN 层数
                  dropout,                # Dropout 比例
                  n_clients,              # 除了本地端以外的客户数量
-                 n_users,                # 用户总数（即所有 user id 的最大值 + 1，用于分类预测）
+                 n_users,                # 用户总数（用于分类预测）
                  ):
         super(Client, self).__init__()
 

@@ -70,6 +70,7 @@ def main():
 
         if not hasattr(data, 'train_mask'):
             raise ValueError(f"Client {cid} 的数据缺少 train_mask 属性")
+        data.train_mask = data.train_mask.bool()  # ✅ 保证是 bool 类型
         if not hasattr(data, 'user_ids'):
             raise ValueError(f"Client {cid} 的数据缺少 user_ids 属性")
 

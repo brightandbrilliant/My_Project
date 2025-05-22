@@ -54,34 +54,48 @@ def split_client_data_by_groups(user_dict, dominant_groups, alpha=0.7, test_rati
     n_other = int((1 - alpha) * n_total)
 
     selected_users = major_users[:n_major] + other_users[:n_other]
-    remaining_users = set(user_dict.keys()) - set(selected_users)
 
     random.shuffle(selected_users)
     n_test = int(test_ratio * len(selected_users))
     test_users = set(selected_users[:n_test])
     train_users = set(selected_users[n_test:])
 
-    return train_users, test_users, remaining_users
+    return train_users, test_users
 
 
-def save_multi_clients_with_masks(user_dict, client_dominant_groups, save_dir, group_id_to_idx, alpha=0.7, test_ratio=0.3, edge_drop_ratio=0.3):
+def save_multi_subgraph_clients(user_dict, client_dominant_groups, save_dir, group_id_to_idx, alpha=0.7, test_ratio=0.3, edge_drop_ratio=0.3):
     os.makedirs(save_dir, exist_ok=True)
-    original_data = preprocess_social_graph(user_dict, group_id_to_idx)
-    uid_to_idx = {uid: i for i, uid in enumerate(original_data.user_ids.tolist())}
-    total_nodes = original_data.num_nodes
 
     for cid, dom_groups in enumerate(client_dominant_groups):
         seed = 42 + cid
         random.seed(seed)
         torch.manual_seed(seed)
 
-        train_users, test_users, invalid_users = split_client_data_by_groups(
+        train_users, test_users = split_client_data_by_groups(
             user_dict, dom_groups, alpha=alpha, test_ratio=test_ratio, seed=seed
         )
 
+        selected_users = train_users.union(test_users)
+
+        # 构建子图字典：只保留这些用户及其内部边
+        sub_user_dict = {}
+        for uid in selected_users:
+            info = user_dict[uid]
+            sub_following = [f for f in info.get('following', []) if f in selected_users]
+            sub_user_dict[uid] = {
+                'groups': info.get('groups', []),
+                'following': sub_following
+            }
+
+        # 构建 PYG 格式
+        data = preprocess_social_graph(sub_user_dict, group_id_to_idx)
+
+        # 创建 train/test mask
+        uid_to_idx = {uid: i for i, uid in enumerate(data.user_ids.tolist())}
+        total_nodes = data.num_nodes
+
         train_mask = torch.zeros(total_nodes, dtype=torch.bool)
         test_mask = torch.zeros(total_nodes, dtype=torch.bool)
-        invalid_mask = torch.zeros(total_nodes, dtype=torch.bool)
 
         for uid in train_users:
             if uid in uid_to_idx:
@@ -89,51 +103,31 @@ def save_multi_clients_with_masks(user_dict, client_dominant_groups, save_dir, g
         for uid in test_users:
             if uid in uid_to_idx:
                 test_mask[uid_to_idx[uid]] = True
-        for uid in invalid_users:
-            if uid in uid_to_idx:
-                invalid_mask[uid_to_idx[uid]] = True
 
-        # --- Step 1: 仅保留有效节点 ---
-        valid_node_indices = torch.where(train_mask | test_mask)[0]
-        valid_node_set = set(valid_node_indices.tolist())
-
-        # --- Step 2: 提取内部边 ---
-        edge_index = original_data.edge_index
-        src, dst = edge_index
-        mask_valid_edge = [
-            i for i in range(src.size(0))
-            if src[i].item() in valid_node_set and dst[i].item() in valid_node_set
-        ]
-        edge_index_valid = edge_index[:, mask_valid_edge]
-
-        # --- Step 3: 随机删边 ---
-        n_edges = edge_index_valid.size(1)
+        # 随机丢弃内部边
+        edge_index = data.edge_index
+        n_edges = edge_index.size(1)
         n_keep = int((1 - edge_drop_ratio) * n_edges)
         perm = torch.randperm(n_edges)[:n_keep]
-        edge_index_valid = edge_index_valid[:, perm]
+        data.edge_index = edge_index[:, perm]
 
-        # --- Step 4: 构造新 data 对象 ---
-        client_data = original_data.clone()
-        client_data.edge_index = edge_index_valid
-        client_data.train_mask = train_mask
-        client_data.test_mask = test_mask
-        client_data.invalid_mask = invalid_mask
-
-        # --- Step 5: 精简 target_labels，只保留有效列 ---
+        # 精简 target_labels，只保留有效列（当前 train/test 节点中至少被关注一次的）
         used_node_mask = train_mask | test_mask
-        target_labels = client_data.target_labels  # shape [N, C]
-        used_targets = target_labels[used_node_mask]  # shape [N_used, C]
-        valid_target_cols = (used_targets.sum(dim=0) > 0)  # shape [C]
+        target_labels = data.target_labels  # shape [N, N]
+        used_targets = target_labels[used_node_mask]
 
-        client_data.target_labels = target_labels[:, valid_target_cols]  # 删除无效标签列
+        # 保存
+        data.train_mask = train_mask
+        data.test_mask = test_mask
 
         path = os.path.join(save_dir, f'client{cid}.pt')
-        torch.save(client_data, path)
+        torch.save(data, path)
 
         print(f"[Client {cid}] Saved to {path}")
         print(f"  Dominant Groups: {dom_groups}")
-        print(f"  Train: {train_mask.sum().item()}, Test: {test_mask.sum().item()}, Invalid: {invalid_mask.sum().item()}")
-        print(f"  Kept Edges: {edge_index_valid.size(1)} / {len(mask_valid_edge)} (after dropping {edge_drop_ratio * 100:.0f}%)")
+        print(f"  Train: {train_mask.sum().item()}, Test: {test_mask.sum().item()}")
+        print(f"  Kept Edges: {data.edge_index.size(1)} / {n_edges} (after dropping {edge_drop_ratio * 100:.0f}%)")
+
 
 def main():
     edge_file = '../../Dataset/BlogCatalog/BlogCatalog-dataset/data/edges.csv'
@@ -153,7 +147,7 @@ def main():
         seed=42
     )
 
-    save_multi_clients_with_masks(
+    save_multi_subgraph_clients(
         user_dict,
         client_dominant_groups,
         save_dir,
