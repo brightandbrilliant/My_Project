@@ -74,12 +74,12 @@ def main():
         if not hasattr(data, 'user_ids'):
             raise ValueError(f"Client {cid} 的数据缺少 user_ids 属性")
 
-        user_ids = data.user_ids
+        # user_ids = data.user_ids
 
         # 替换为全尺寸的特征矩阵（填零）
-        full_x = torch.zeros((client_user_counts[cid], args.feature_dim), dtype=data.x.dtype)
-        full_x[user_ids] = data.x
-        data.x = full_x
+        # full_x = torch.zeros((client_user_counts[cid], args.feature_dim), dtype=data.x.dtype)
+        # full_x[user_ids] = data.x
+        # data.x = full_x
 
         dataset = [data]
         loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)

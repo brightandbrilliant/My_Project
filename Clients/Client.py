@@ -145,8 +145,10 @@ class Client(nn.Module):
             target_labels = target_labels[mask]
 
         # Step 6: 全量输出 -> 选择本 client 有效列
-        full_logits = self.predictor(fused_embed)  # [N, total_user_count]
-        logits = full_logits[:, user_ids]  # [N, num_local_users]
+        # full_logits = self.predictor(fused_embed)  # [N, total_user_count]
+        # logits = full_logits[:, user_ids]  # [N, num_local_users]
+
+        logits = self.predictor(fused_embed)
 
         if debug and (torch.isnan(logits).any() or torch.isinf(logits).any()):
             print("[Client Debug] logits has nan or inf!")
