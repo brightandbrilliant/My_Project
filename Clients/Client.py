@@ -36,6 +36,35 @@ class MLPPredictor(nn.Module):
         return self.network(x)
 
 
+class ResidualPredictor(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, num_layers=2, dropout=0.5):
+        super().__init__()
+        self.linears = nn.ModuleList()
+        self.norms = nn.ModuleList()
+
+        dims = [in_dim] + [hidden_dim] * (num_layers - 1) + [out_dim]
+
+        for i in range(num_layers):
+            self.linears.append(nn.Linear(dims[i], dims[i+1]))
+            if i < num_layers - 1:
+                self.norms.append(nn.LayerNorm(dims[i+1]))
+
+        self.dropout = nn.Dropout(dropout)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        for i, linear in enumerate(self.linears[:-1]):
+            residual = x
+            x = linear(x)
+            x = self.norms[i](x)
+            x = self.activation(x)
+            x = self.dropout(x)
+            if residual.shape == x.shape:
+                x = x + residual  # 加残差
+        x = self.linears[-1](x)
+        return x
+
+
 class Client(nn.Module):
     def __init__(self,
                  node_feat_dim,          # 节点的初始特征维度
