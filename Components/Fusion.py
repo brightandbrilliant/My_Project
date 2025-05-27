@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class FusionModule(nn.Module):
     def __init__(self, node_dim, graph_dim, out_dim):
         super(FusionModule, self).__init__()
@@ -14,14 +15,13 @@ class FusionModule(nn.Module):
         concat = torch.cat([node_embed, graph_embed], dim=-1)
         return self.fc(concat)
 
-
 class AttentionalFusion(nn.Module):
     def __init__(self, node_dim, graph_dim, out_dim, hidden_dim=128):
         super(AttentionalFusion, self).__init__()
         self.node_proj = nn.Linear(node_dim, hidden_dim)
         self.graph_proj = nn.Linear(graph_dim, hidden_dim)
         self.attn_score = nn.Linear(hidden_dim, 1)
-        self.output_proj = nn.Linear(node_dim + graph_dim, out_dim)
+        self.output_proj = nn.Linear(node_dim, out_dim)
 
     def forward(self, node_embed, graph_embed, batch=None):
         if graph_embed.dim() == 2 and node_embed.size(0) != graph_embed.size(0):
@@ -37,8 +37,9 @@ class AttentionalFusion(nn.Module):
 
         # 使用注意力加权融合
         fused = attn_weights * node_embed + (1 - attn_weights) * graph_embed  # [N, D]
-        out = self.output_proj(torch.cat([fused, node_embed], dim=-1))        # 可选：也可拼接 graph_embed
+        out = self.output_proj(fused)
         return out
+
 
 
 class CrossAttentionFusionModule(nn.Module):
